@@ -182,29 +182,54 @@ def scrape_team_detail(page, team: dict) -> dict:
                 )
                 log.info(f"    Classement: {len(options)} options trouvées")
 
-                for opt in options[:4]:  # Max 4 classements
+                for opt in options[:3]:  # Max 3 classements
                     opt_text = opt.inner_text().strip()
                     if not opt_text or len(opt_text) < 2:
                         continue
                     try:
                         opt.click()
-                        time.sleep(2)
-                        rows = page.query_selector_all("table tr")
+                        time.sleep(3)  # Attendre chargement React
+
+                        # Debug première option seulement
+                        if not result["standings"]:
+                            page.screenshot(path="data/debug_standings_after_click.png")
+                            # Logger toutes les classes présentes
+                            all_els = page.query_selector_all("table, tbody, tr, [class*='Row'], [class*='row'], [class*='team'], [class*='Team']")
+                            log.info(f"    Éléments après clic: {len(all_els)}")
+                            for el in all_els[:3]:
+                                cls = el.get_attribute("class") or ""
+                                txt = el.inner_text().strip()[:60]
+                                log.info(f"      class='{cls[:50]}' text='{txt}'")
+
+                        # Essayer plusieurs sélecteurs
                         standing_rows = []
-                        for r in rows:
-                            txt = r.inner_text().strip()
-                            if txt and len(txt) > 2:
-                                standing_rows.append(txt)
+                        for sel in ["table tr", "tbody tr", "[class*='Row']", "[class*='row']",
+                                    "[class*='team']", "[class*='Team']", "li"]:
+                            rows = page.query_selector_all(sel)
+                            for r in rows:
+                                txt = r.inner_text().strip()
+                                if txt and 3 < len(txt) < 200:
+                                    standing_rows.append(txt)
+                            if standing_rows:
+                                log.info(f"    Sélecteur '{sel}' → {len(standing_rows)} rangées")
+                                break
+
                         if standing_rows:
                             result["standings"].append({
                                 "division": opt_text,
                                 "rows": standing_rows
                             })
-                            log.info(f"    '{opt_text}': {len(standing_rows)} rangées")
-                        # Rouvrir le dropdown pour la prochaine option
-                        if dropdown_trigger:
-                            dropdown_trigger.click()
-                            time.sleep(1)
+                            log.info(f"    '{opt_text}': {len(standing_rows)} rangées ✓")
+
+                        # Rouvrir le dropdown
+                        dropdown_trigger.click()
+                        time.sleep(1.5)
+                        options = page.query_selector_all(
+                            "[class*='option'], [role='option'], "
+                            "[class*='item'], [class*='Item'], "
+                            "[class*='menu'] li, [class*='Menu'] li, "
+                            "[class*='list'] li"
+                        )
                     except Exception as e:
                         log.debug(f"    Option '{opt_text}': {e}")
             else:
