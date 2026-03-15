@@ -1,17 +1,11 @@
 name: Hockey Coach — Scraping & Stratégies
 
 on:
-  workflow_dispatch:  # Lancement manuel seulement
+  workflow_dispatch:
 
-# ╔══════════════════════════════════════════════╗
-# ║             SWITCHES — ON / OFF              ║
-# ╠══════════════════════════════════════════════╣
-# ║ ENABLE_AI_STRATEGIES:  true/false            ║
-# ║ ENABLE_PUBSPORTS:      true/false            ║
-# ╚══════════════════════════════════════════════╝
 env:
   ENABLE_AI_STRATEGIES: false   # ← true quand tu as ta clé API Anthropic
-  ENABLE_PUBSPORTS:     false   # ← true si PublicationSports devient disponible
+  ENABLE_PUBSPORTS:     false   # ← true si PublicationSports disponible
 
 jobs:
   scrape-and-generate:
@@ -37,7 +31,7 @@ jobs:
       - name: Créer le dossier data/
         run: mkdir -p data
 
-      # ── Étape 1 : Spordle (toujours actif) ───────────────────────────────
+      # ── Étape 1 : Spordle ────────────────────────────────────────────────
       - name: Scraping Spordle — AHM Anjou
         env:
           SPORDLE_EMAIL:    ${{ secrets.SPORDLE_EMAIL }}
@@ -45,7 +39,6 @@ jobs:
         run: python spordle_scraper.py
         continue-on-error: true
 
-      # ── Debug artifacts ───────────────────────────────────────────────────
       - name: Sauvegarder debug Spordle
         if: always()
         uses: actions/upload-artifact@v4
@@ -54,17 +47,17 @@ jobs:
           path: data/
           if-no-files-found: ignore
 
-      # ── Étape 2 : PublicationSports (switch ON/OFF) ───────────────────────
-      - name: Scraping PublicationSports — Stats adversaires
+      # ── Étape 2 : PublicationSports (switch) ────────────────────────────
+      - name: Scraping PublicationSports
         if: env.ENABLE_PUBSPORTS == 'true'
         run: python pubsports_scraper.py
         continue-on-error: true
 
       - name: PublicationSports désactivé
         if: env.ENABLE_PUBSPORTS == 'false'
-        run: echo "⏭️  PublicationSports désactivé — stats adversaires via Spordle uniquement"
+        run: echo "⏭️  PublicationSports désactivé"
 
-      # ── Étape 3 : Stratégies IA (switch ON/OFF) ───────────────────────────
+      # ── Étape 3 : Stratégies IA (switch) ────────────────────────────────
       - name: Générer les stratégies via Claude AI
         if: env.ENABLE_AI_STRATEGIES == 'true'
         env:
@@ -73,23 +66,16 @@ jobs:
 
       - name: Stratégies IA désactivées
         if: env.ENABLE_AI_STRATEGIES == 'false'
-        run: echo "⏭️  Stratégies IA désactivées — ajoute ta clé API et change ENABLE_AI_STRATEGIES à true"
+        run: echo "⏭️  Stratégies IA désactivées"
 
-      # ── Étape 4 : Commit des données ─────────────────────────────────────
-      - name: Commit & push les données
+      # ── Étape 4 : Copier data/ dans dashboard/ et commit ────────────────
+      - name: Copier données dans dashboard et commit
         run: |
+          cp -r data/ dashboard/data/
           git config user.name  "hockey-coach-bot"
           git config user.email "bot@ahm-anjou.hockey"
-          git add data/
+          git add dashboard/ data/
           git diff --staged --quiet || git commit -m "🏒 Mise à jour — $(date +'%Y-%m-%d %H:%M') ET"
           git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # ── Étape 5 : Déployer le dashboard ──────────────────────────────────
-      - name: Déployer dashboard sur GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dashboard
-          publish_branch: gh-pages
