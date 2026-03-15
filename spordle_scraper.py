@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """
-spordle_scraper.py
-Scrape les données publiques de l'AHM Anjou depuis Spordle
-Pages publiques — pas de login requis
+spordle_scraper.py - AHM Anjou
+Scrape équipes, rosters, horaires et classements depuis Spordle (pages publiques)
 """
 
-import os
-import json
-import time
-import logging
+import os, json, time, logging, re
 from datetime import datetime
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
-BASE_URL    = "https://page.spordle.com/fr/ahm-anjou"
+BASE_URL     = "https://page.spordle.com/fr/ahm-anjou"
 SPORDLE_ROOT = "https://page.spordle.com"
-OUTPUT_FILE = "data/spordle_data.json"
-CATEGORIES  = ["M11", "M13"]  # ← ajouter M7, M9, M15, M18 quand prêt
+OUTPUT_FILE  = "data/spordle_data.json"
+
+# ── Seules ces catégories seront scrappées ─────────────────────────────────
+TARGET_CATEGORIES = ["M11", "M13"]  # ← ajouter M7, M9, M15, M18 quand prêt
+
+NAV_WORDS = {"horaire", "classement", "joueurs", "accueil", "contact", "inscription", "équipes"}
 
 
 def new_browser(playwright):
@@ -41,30 +41,74 @@ def wait_and_load(page, url: str, wait_ms: int = 4000) -> None:
 
 
 def scrape_teams(page) -> list:
-    """Scrape la liste des équipes avec leurs URLs"""
+    """
+    Scrape la liste des équipes M11/M13.
+    La catégorie est dans le titre de section (ex: 'M11 A MIXTE'),
+    pas dans le nom de l'équipe (ex: 'EXPRESS').
+    On cherche donc la section parente pour déterminer la catégorie.
+    """
     log.info("Scraping équipes...")
     wait_and_load(page, f"{BASE_URL}/teams", wait_ms=5000)
+
+    # Sauvegarder pour debug
+    os.makedirs("data", exist_ok=True)
+    page.screenshot(path="data/teams_debug.png")
 
     teams = []
     seen_urls = set()
 
+    # Chercher tous les liens vers des pages d'équipe (/teams/XXXXX)
     links = page.query_selector_all("a[href*='/teams/']")
-    log.info(f"  → {len(links)} liens d'équipes trouvés")
+    log.info(f"  → {len(links)} liens d'équipes trouvés au total")
 
     for link in links:
         name = link.inner_text().strip()
         href = link.get_attribute("href") or ""
+
         if not href or href in seen_urls:
             continue
-        seen_urls.add(href)
-        nav_words = {"horaire", "classement", "joueurs", "accueil", "contact", "inscription"}
-        if name and len(name) > 2 and name.lower() not in nav_words:
-            cat = next((c for c in CATEGORIES if c.upper() in name.upper()), "Autre")
-            full_url = SPORDLE_ROOT + href if href.startswith("/") else href
-            if cat != "Autre":  # Garder seulement les catégories ciblées
-                teams.append({"name": name, "url": full_url, "category": cat})
+        if name.lower() in NAV_WORDS or len(name) < 2:
+            continue
 
-    log.info(f"  → {len(teams)} équipes uniques")
+        seen_urls.add(href)
+
+        # Chercher la catégorie dans les éléments parents (section, div, h2, h3...)
+        cat = None
+        try:
+            # Remonter jusqu'à 5 niveaux pour trouver un titre de section M11/M13
+            parent_text = page.evaluate("""(el) => {
+                let node = el;
+                for (let i = 0; i < 8; i++) {
+                    node = node.parentElement;
+                    if (!node) break;
+                    const text = node.innerText || '';
+                    if (text.match(/\\bM11\\b/)) return 'M11';
+                    if (text.match(/\\bM13\\b/)) return 'M13';
+                    if (text.match(/\\bM7\\b/))  return 'M7';
+                    if (text.match(/\\bM9\\b/))  return 'M9';
+                    if (text.match(/\\bM15\\b/)) return 'M15';
+                    if (text.match(/\\bM18\\b/)) return 'M18';
+                }
+                return null;
+            }""", link)
+            if parent_text in TARGET_CATEGORIES:
+                cat = parent_text
+        except Exception:
+            pass
+
+        # Fallback : chercher dans le nom du lien lui-même
+        if not cat:
+            for tc in TARGET_CATEGORIES:
+                if re.search(rf'\b{tc}\b', name.upper()):
+                    cat = tc
+                    break
+
+        if cat:
+            full_url = SPORDLE_ROOT + href if href.startswith("/") else href
+            teams.append({"name": name, "url": full_url, "category": cat})
+            log.info(f"    ✓ {cat} — {name}")
+
+    log.info(f"  → {len(teams)} équipes {TARGET_CATEGORIES} trouvées")
     return teams
 
 
@@ -78,41 +122,41 @@ def scrape_team_detail(page, team: dict) -> dict:
     try:
         wait_and_load(page, url, wait_ms=3000)
 
-        # ── Roster (page par défaut — Cahier d'équipe) ──
-        players = page.query_selector_all("table tr, [class*='player'], [class*='joueur'], [class*='member']")
-        for p in players:
-            text = p.inner_text().strip()
-            if text and len(text) > 2 and len(text) < 100:
+        # ── Roster (onglet Cahier d'équipe — actif par défaut) ──
+        rows = page.query_selector_all("table tr")
+        for row in rows:
+            text = row.inner_text().strip()
+            if text and len(text) > 2 and len(text) < 120:
                 result["roster"].append(text)
 
-        # ── Horaire — cliquer l'onglet ──
+        # ── Horaire ──
         try:
-            horaire_btn = page.locator("button:has-text('Horaire'), a:has-text('Horaire')").first
-            horaire_btn.click()
-            time.sleep(2)
-            games = page.query_selector_all("table tr, [class*='game'], [class*='match'], [class*='event']")
-            for g in games:
+            page.locator("button:has-text('Horaire'), a:has-text('Horaire')").first.click()
+            time.sleep(2.5)
+            game_rows = page.query_selector_all("table tr, [class*='game'], [class*='match']")
+            for g in game_rows:
                 text = g.inner_text().strip()
-                if text and len(text) > 5:
+                if text and 5 < len(text) < 300:
                     result["schedule"].append(text)
+            log.debug(f"    Horaire: {len(result['schedule'])} entrées")
         except Exception as e:
-            log.debug(f"    Onglet Horaire non trouvé: {e}")
+            log.debug(f"    Onglet Horaire: {e}")
 
-        # ── Classement — cliquer l'onglet ──
+        # ── Classement ──
         try:
-            classement_btn = page.locator("button:has-text('Classement'), a:has-text('Classement')").first
-            classement_btn.click()
-            time.sleep(2)
-            rows = page.query_selector_all("table tr, [class*='standing'], [class*='rank'], [class*='classement']")
-            for r in rows:
+            page.locator("button:has-text('Classement'), a:has-text('Classement')").first.click()
+            time.sleep(2.5)
+            stand_rows = page.query_selector_all("table tr, [class*='standing'], [class*='rank']")
+            for r in stand_rows:
                 text = r.inner_text().strip()
                 if text and len(text) > 2:
                     result["standings"].append(text)
+            log.debug(f"    Classement: {len(result['standings'])} entrées")
         except Exception as e:
-            log.debug(f"    Onglet Classement non trouvé: {e}")
+            log.debug(f"    Onglet Classement: {e}")
 
     except Exception as e:
-        log.warning(f"  Erreur scraping équipe {team.get('name')}: {e}")
+        log.warning(f"  Erreur {team.get('name')}: {e}")
 
     return result
 
@@ -121,10 +165,8 @@ def scrape_schedule_global(page) -> list:
     """Scrape l'horaire global de l'association"""
     log.info("Scraping horaire global...")
     wait_and_load(page, f"{BASE_URL}/schedule", wait_ms=5000)
-
     games = []
-    selectors = ["[class*='game']", "[class*='match']", "[class*='event']", "[class*='schedule']", "table tr"]
-    for sel in selectors:
+    for sel in ["[class*='game']", "[class*='match']", "[class*='event']", "[class*='schedule']", "table tr"]:
         items = page.query_selector_all(sel)
         if len(items) > 1:
             for item in items:
@@ -134,7 +176,6 @@ def scrape_schedule_global(page) -> list:
             if games:
                 log.info(f"  → {len(games)} matchs avec '{sel}'")
                 break
-
     return games
 
 
@@ -154,31 +195,24 @@ def main():
         page = context.new_page()
 
         try:
-            # 1. Liste des équipes
             result["teams"] = scrape_teams(page)
 
-            # 2. Détails de chaque équipe (roster + horaire + classement)
-            #    Limiter à 20 équipes pour éviter un timeout GitHub Actions
-            teams_to_scrape = result["teams"][:20]
-            log.info(f"Scraping détails de {len(teams_to_scrape)} équipes...")
-
-            for i, team in enumerate(teams_to_scrape):
-                log.info(f"  [{i+1}/{len(teams_to_scrape)}] {team['name']} ({team['category']})")
+            log.info(f"Scraping détails de {len(result['teams'])} équipes...")
+            for i, team in enumerate(result["teams"]):
+                log.info(f"  [{i+1}/{len(result['teams'])}] {team['name']} ({team['category']})")
                 detail = scrape_team_detail(page, team)
                 team.update(detail)
                 log.info(f"    → {len(detail['roster'])} joueurs | {len(detail['schedule'])} matchs | {len(detail['standings'])} classements")
                 time.sleep(0.5)
 
-            # 3. Horaire global
             result["schedule"] = scrape_schedule_global(page)
 
-            # Consolider les classements depuis les équipes
             for team in result["teams"]:
                 if team.get("standings"):
                     result["standings"].extend(team["standings"])
 
         except Exception as e:
-            log.error(f"Erreur scraping Spordle: {e}")
+            log.error(f"Erreur: {e}")
             raise
         finally:
             browser.close()
@@ -186,8 +220,8 @@ def main():
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
-    log.info(f"\n✅ Données Spordle sauvegardées → {OUTPUT_FILE}")
-    log.info(f"   {len(result['schedule'])} matchs globaux | {len(result['teams'])} équipes | {len(result['standings'])} classements")
+    log.info(f"\n✅ {OUTPUT_FILE}")
+    log.info(f"   {len(result['schedule'])} matchs | {len(result['teams'])} équipes | {len(result['standings'])} classements")
 
 
 if __name__ == "__main__":
