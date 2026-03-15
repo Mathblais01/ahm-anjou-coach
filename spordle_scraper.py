@@ -113,53 +113,40 @@ def scrape_teams(page) -> list:
 
 
 def scrape_team_detail(page, team: dict) -> dict:
-    """Scrape le roster, l'horaire et le classement d'une équipe"""
+    """Scrape le roster, l'horaire et le classement d'une équipe via URL directe"""
     result = {"roster": [], "schedule": [], "standings": []}
     url = team.get("url", "")
     if not url:
         return result
 
-    try:
-        wait_and_load(page, url, wait_ms=3000)
+    base_url = url.split("?")[0]
 
-        # ── Roster (onglet Cahier d'équipe — actif par défaut) ──
-        rows = page.query_selector_all("table tr")
-        for row in rows:
+    try:
+        # ── Roster ──
+        wait_and_load(page, base_url, wait_ms=3000)
+        for row in page.query_selector_all("table tr"):
             text = row.inner_text().strip()
-            if text and len(text) > 2 and len(text) < 120:
+            if text and 2 < len(text) < 120:
                 result["roster"].append(text)
 
-        # ── Horaire ──
-        try:
-            page.locator("button:has-text('Horaire'), a:has-text('Horaire')").first.click()
-            time.sleep(2.5)
-            game_rows = page.query_selector_all("table tr, [class*='game'], [class*='match']")
-            for g in game_rows:
-                text = g.inner_text().strip()
-                if text and 5 < len(text) < 300:
-                    result["schedule"].append(text)
-            log.debug(f"    Horaire: {len(result['schedule'])} entrées")
-        except Exception as e:
-            log.debug(f"    Onglet Horaire: {e}")
+        # ── Horaire — URL directe ──
+        wait_and_load(page, f"{base_url}?tab=schedule", wait_ms=3000)
+        for g in page.query_selector_all("table tr, [class*='game'], [class*='match'], [class*='event']"):
+            text = g.inner_text().strip()
+            if text and 5 < len(text) < 300:
+                result["schedule"].append(text)
 
-        # ── Classement ──
-        try:
-            page.locator("button:has-text('Classement'), a:has-text('Classement')").first.click()
-            time.sleep(2.5)
-            stand_rows = page.query_selector_all("table tr, [class*='standing'], [class*='rank']")
-            for r in stand_rows:
-                text = r.inner_text().strip()
-                if text and len(text) > 2:
-                    result["standings"].append(text)
-            log.debug(f"    Classement: {len(result['standings'])} entrées")
-        except Exception as e:
-            log.debug(f"    Onglet Classement: {e}")
+        # ── Classement — URL directe ──
+        wait_and_load(page, f"{base_url}?tab=standings", wait_ms=3000)
+        for r in page.query_selector_all("table tr, [class*='standing'], [class*='rank']"):
+            text = r.inner_text().strip()
+            if text and len(text) > 2:
+                result["standings"].append(text)
 
     except Exception as e:
         log.warning(f"  Erreur {team.get('name')}: {e}")
 
     return result
-
 
 def scrape_schedule_global(page) -> list:
     """Scrape l'horaire global de l'association"""
