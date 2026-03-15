@@ -25,16 +25,40 @@ CATEGORIES = ["M7", "M9", "M11", "M13", "M15", "M18"]
 
 def login(page):
     log.info("Connexion à Spordle...")
-    page.goto(LOGIN_URL, wait_until="networkidle")
-    time.sleep(2)
+    page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=30000)
+    time.sleep(4)  # Attendre le JS
 
-    # Remplir le formulaire de connexion
-    page.fill('input[type="email"], input[name="email"], input[id*="email"]', EMAIL)
-    page.fill('input[type="password"], input[name="password"], input[id*="password"]', PASSWORD)
-    page.click('button[type="submit"], button:has-text("Connexion"), button:has-text("Se connecter")')
-    page.wait_for_load_state("networkidle")
-    time.sleep(2)
-    log.info("Connecté.")
+    # Sauvegarder la page de login pour diagnostic
+    os.makedirs("data", exist_ok=True)
+    with open("data/login_debug.html", "w", encoding="utf-8") as f:
+        f.write(page.content())
+    page.screenshot(path="data/login_debug.png")
+    log.info(f"  URL actuelle: {page.url}")
+
+    # Lister tous les inputs visibles
+    inputs = page.query_selector_all("input")
+    log.info(f"  {len(inputs)} input(s) trouvé(s) sur la page")
+    for inp in inputs:
+        t = inp.get_attribute("type") or ""
+        n = inp.get_attribute("name") or ""
+        i = inp.get_attribute("id") or ""
+        p = inp.get_attribute("placeholder") or ""
+        log.info(f"    input: type={t} name={n} id={i} placeholder={p}")
+
+    # Tentative de remplissage avec timeout plus long
+    try:
+        page.wait_for_selector("input", timeout=15000)
+        email_sel = "input[type=email], input[name*=email], input[id*=email], input[placeholder*=mail], input[placeholder*=courriel]"
+        pwd_sel   = "input[type=password]"
+        page.fill(email_sel, EMAIL, timeout=10000)
+        page.fill(pwd_sel,   PASSWORD, timeout=10000)
+        page.click("button[type=submit], button:has-text(Connexion), button:has-text(Se connecter), button:has-text(Login)")
+        page.wait_for_load_state("networkidle", timeout=20000)
+        time.sleep(2)
+        log.info(f"  Connecté. URL: {page.url}")
+    except Exception as e:
+        log.error(f"  Échec login: {e}")
+        raise
 
 def scrape_schedule(page) -> list:
     """Scrape l'horaire de toutes les équipes AHM Anjou"""
@@ -140,10 +164,9 @@ def main():
     }
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=["--ignore-certificate-errors"])
+        browser = p.chromium.launch(headless=True)
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-            ignore_https_errors=True
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
         )
         page = context.new_page()
 
