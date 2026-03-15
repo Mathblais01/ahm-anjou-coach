@@ -3,12 +3,6 @@ name: Hockey Coach — Scraping & Stratégies
 on:
   workflow_dispatch:  # Lancement manuel seulement
 
-# ╔══════════════════════════════════════════╗
-# ║           SWITCHES — ON / OFF            ║
-# ╠══════════════════════════════════════════╣
-# ║ ENABLE_AI_STRATEGIES: true  → génère     ║
-# ║                       false → saute      ║
-# ╚══════════════════════════════════════════╝
 env:
   ENABLE_AI_STRATEGIES: false   # ← changer à true quand tu as ta clé API
 
@@ -43,6 +37,15 @@ jobs:
           SPORDLE_PASSWORD: ${{ secrets.SPORDLE_PASSWORD }}
         run: python spordle_scraper.py
         continue-on-error: true
+
+      # ── Debug : screenshot login sauvegardé comme artifact ───────────────
+      - name: Sauvegarder debug Spordle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spordle-debug
+          path: data/
+          if-no-files-found: ignore
 
       # ── Étape 2 : PublicationSports (public) ─────────────────────────────
       - name: Scraping PublicationSports — Stats adversaires
