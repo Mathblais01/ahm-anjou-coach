@@ -159,88 +159,56 @@ def scrape_team_detail(page, team: dict) -> dict:
                                                               "SAMEDI", "DIMANCHE", "2025", "2026"]):
                     result["schedule"].append({"date_header": text})
 
-        # ── Classement — dropdown React custom ──
+        # ── Classement — intercepter les appels API réseau ──
+        api_responses = []
+
+        def handle_response(response):
+            url = response.url
+            if any(k in url.lower() for k in ["standing", "classement", "ranking", "leaderboard"]):
+                try:
+                    data = response.json()
+                    api_responses.append({"url": url, "data": data})
+                    log.info(f"    API interceptée: {url[:80]}")
+                except Exception:
+                    pass
+
+        page.on("response", handle_response)
         wait_and_load(page, f"{base_url}?tab=standings", wait_ms=4000)
+
+        # Cliquer la première option pour déclencher l'appel API
         try:
-            # Cliquer sur le dropdown pour l'ouvrir (composant React, pas un <select>)
             dropdown_trigger = page.query_selector(
-                "[class*='dropdown'], [class*='Dropdown'], "
-                "[class*='select'], [class*='Select'], "
-                "[placeholder*='horaire'], [placeholder*='Horaire'], "
-                "[placeholder*='Sélectionnez'], [placeholder*='selectionnez']"
+                "[placeholder*='lectionnez'], [placeholder*='horaire'], "
+                "[class*='Dropdown__control'], [class*='dropdown__control']"
             )
             if dropdown_trigger:
                 dropdown_trigger.click()
                 time.sleep(1.5)
-
-                # Lire les options qui apparaissent après l'ouverture
-                options = page.query_selector_all(
-                    "[class*='option'], [role='option'], "
-                    "[class*='item'], [class*='Item'], "
-                    "[class*='menu'] li, [class*='Menu'] li, "
-                    "[class*='list'] li"
-                )
-                log.info(f"    Classement: {len(options)} options trouvées")
-
-                for opt in options[:3]:  # Max 3 classements
-                    opt_text = opt.inner_text().strip()
-                    if not opt_text or len(opt_text) < 2:
-                        continue
-                    try:
-                        opt.click()
-                        time.sleep(3)  # Attendre chargement React
-
-                        # Debug première option seulement
-                        if not result["standings"]:
-                            page.screenshot(path="data/debug_standings_after_click.png")
-                            # Logger toutes les classes présentes
-                            all_els = page.query_selector_all("table, tbody, tr, [class*='Row'], [class*='row'], [class*='team'], [class*='Team']")
-                            log.info(f"    Éléments après clic: {len(all_els)}")
-                            for el in all_els[:3]:
-                                cls = el.get_attribute("class") or ""
-                                txt = el.inner_text().strip()[:60]
-                                log.info(f"      class='{cls[:50]}' text='{txt}'")
-
-                        # Essayer plusieurs sélecteurs
-                        standing_rows = []
-                        for sel in ["table tr", "tbody tr", "[class*='Row']", "[class*='row']",
-                                    "[class*='team']", "[class*='Team']", "li"]:
-                            rows = page.query_selector_all(sel)
-                            for r in rows:
-                                txt = r.inner_text().strip()
-                                if txt and 3 < len(txt) < 200:
-                                    standing_rows.append(txt)
-                            if standing_rows:
-                                log.info(f"    Sélecteur '{sel}' → {len(standing_rows)} rangées")
-                                break
-
-                        if standing_rows:
-                            result["standings"].append({
-                                "division": opt_text,
-                                "rows": standing_rows
-                            })
-                            log.info(f"    '{opt_text}': {len(standing_rows)} rangées ✓")
-
-                        # Rouvrir le dropdown
-                        dropdown_trigger.click()
-                        time.sleep(1.5)
-                        options = page.query_selector_all(
-                            "[class*='option'], [role='option'], "
-                            "[class*='item'], [class*='Item'], "
-                            "[class*='menu'] li, [class*='Menu'] li, "
-                            "[class*='list'] li"
-                        )
-                    except Exception as e:
-                        log.debug(f"    Option '{opt_text}': {e}")
-            else:
-                log.info("    Dropdown non trouvé — lecture directe")
-                rows = page.query_selector_all("table tr")
-                for r in rows:
-                    txt = r.inner_text().strip()
-                    if txt and len(txt) > 2:
-                        result["standings"].append(txt)
+                first_option = page.query_selector("[class*='option'], [role='option'], [class*='menu'] li")
+                if first_option:
+                    opt_text = first_option.inner_text().strip()
+                    first_option.click()
+                    time.sleep(3)
+                    log.info(f"    Option sélectionnée: '{opt_text}'")
         except Exception as e:
-            log.warning(f"    Classement erreur: {e}")
+            log.debug(f"    Dropdown: {e}")
+
+        if api_responses:
+            result["standings"] = api_responses
+            log.info(f"    {len(api_responses)} réponses API classement interceptées")
+        else:
+            # Fallback — lire le texte brut et chercher lignes de classement
+            log.info("    Aucune API — lecture texte brut")
+            page.screenshot(path="data/debug_standings_final.png")
+            import re
+            all_text = page.inner_text("body")
+            for line in all_text.split("\n"):
+                line = line.strip()
+                if line and re.search(r'\d+\s+[A-ZÁÀÂÉÈÊÎÏÔÙÛÜÇ]', line):
+                    result["standings"].append({"raw": line})
+            log.info(f"    {len(result['standings'])} lignes de classement trouvées")
+
+        page.remove_listener("response", handle_response)
 
     except Exception as e:
         log.warning(f"  Erreur {team.get('name')}: {e}")
