@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 BASE_URL    = "https://page.spordle.com/fr/ahm-anjou"
 SPORDLE_ROOT = "https://page.spordle.com"
 OUTPUT_FILE = "data/spordle_data.json"
-CATEGORIES  = ["M7", "M9", "M11", "M13", "M15", "M18"]
+CATEGORIES  = ["M11", "M13"]  # ← ajouter M7, M9, M15, M18 quand prêt
 
 
 def new_browser(playwright):
@@ -57,10 +57,12 @@ def scrape_teams(page) -> list:
         if not href or href in seen_urls:
             continue
         seen_urls.add(href)
-        if name and len(name) > 2:
+        nav_words = {"horaire", "classement", "joueurs", "accueil", "contact", "inscription"}
+        if name and len(name) > 2 and name.lower() not in nav_words:
             cat = next((c for c in CATEGORIES if c.upper() in name.upper()), "Autre")
             full_url = SPORDLE_ROOT + href if href.startswith("/") else href
-            teams.append({"name": name, "url": full_url, "category": cat})
+            if cat != "Autre":  # Garder seulement les catégories ciblées
+                teams.append({"name": name, "url": full_url, "category": cat})
 
     log.info(f"  → {len(teams)} équipes uniques")
     return teams
