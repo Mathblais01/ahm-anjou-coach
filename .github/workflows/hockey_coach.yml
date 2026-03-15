@@ -1,10 +1,7 @@
 name: Hockey Coach — Scraping & Stratégies
 
 on:
-  schedule:
-    # Tous les jours à 6h00 AM heure de Montréal (11h UTC)
-    - cron: "0 11 * * *"
-  workflow_dispatch:  # Permet de lancer manuellement
+  workflow_dispatch:  # Lancement manuel seulement
 
 jobs:
   scrape-and-generate:
