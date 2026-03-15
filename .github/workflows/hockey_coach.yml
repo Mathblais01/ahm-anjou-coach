@@ -3,6 +3,15 @@ name: Hockey Coach — Scraping & Stratégies
 on:
   workflow_dispatch:  # Lancement manuel seulement
 
+# ╔══════════════════════════════════════════╗
+# ║           SWITCHES — ON / OFF            ║
+# ╠══════════════════════════════════════════╣
+# ║ ENABLE_AI_STRATEGIES: true  → génère     ║
+# ║                       false → saute      ║
+# ╚══════════════════════════════════════════╝
+env:
+  ENABLE_AI_STRATEGIES: false   # ← changer à true quand tu as ta clé API
+
 jobs:
   scrape-and-generate:
     runs-on: ubuntu-latest
@@ -33,31 +42,36 @@ jobs:
           SPORDLE_EMAIL:    ${{ secrets.SPORDLE_EMAIL }}
           SPORDLE_PASSWORD: ${{ secrets.SPORDLE_PASSWORD }}
         run: python spordle_scraper.py
-        continue-on-error: true  # Ne pas bloquer si Spordle change son interface
+        continue-on-error: true
 
       # ── Étape 2 : PublicationSports (public) ─────────────────────────────
       - name: Scraping PublicationSports — Stats adversaires
         run: python pubsports_scraper.py
         continue-on-error: true
 
-      # ── Étape 3 : Génération stratégies IA ───────────────────────────────
+      # ── Étape 3 : Stratégies IA (switch ON/OFF) ───────────────────────────
       - name: Générer les stratégies via Claude AI
+        if: env.ENABLE_AI_STRATEGIES == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python strategy_generator.py
 
-      # ── Étape 4 : Commit des données mises à jour ────────────────────────
+      - name: Stratégies IA désactivées — mode données seulement
+        if: env.ENABLE_AI_STRATEGIES == 'false'
+        run: echo "⏭️  Stratégies IA désactivées — ajoute ta clé API et change ENABLE_AI_STRATEGIES à true"
+
+      # ── Étape 4 : Commit des données ─────────────────────────────────────
       - name: Commit & push les données
         run: |
           git config user.name  "hockey-coach-bot"
           git config user.email "bot@ahm-anjou.hockey"
           git add data/
-          git diff --staged --quiet || git commit -m "🏒 Mise à jour automatique — $(date +'%Y-%m-%d %H:%M') ET"
+          git diff --staged --quiet || git commit -m "🏒 Mise à jour — $(date +'%Y-%m-%d %H:%M') ET"
           git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Étape 5 : Déployer le dashboard (GitHub Pages) ───────────────────
+      # ── Étape 5 : Déployer le dashboard ──────────────────────────────────
       - name: Déployer dashboard sur GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
