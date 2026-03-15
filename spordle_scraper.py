@@ -129,34 +129,45 @@ def scrape_team_detail(page, team: dict) -> dict:
             if text and 2 < len(text) < 120:
                 result["roster"].append(text)
 
-        # ── Horaire — URL directe ──
+        # ── Horaire — URL directe + extraction liens adversaires ──
         wait_and_load(page, f"{base_url}?tab=schedule", wait_ms=4000)
-        # L'horaire Spordle utilise des divs, pas des tables
-        # Structure: titre de date (h2/h3) + carte de match (div)
-        # On capture tout le texte visible de la section principale
+        seen_games = set()
+
+        # Chercher les cartes de match
         game_containers = page.query_selector_all(
             "[class*='game'], [class*='match'], [class*='event'], "
             "[class*='schedule'], [class*='card'], [class*='Game'], "
             "[class*='Match'], [class*='Event']"
         )
-        seen_games = set()
         for g in game_containers:
             text = g.inner_text().strip()
-            if text and 10 < len(text) < 400 and text not in seen_games:
-                seen_games.add(text)
-                result["schedule"].append({"raw": text})
+            if not text or not (10 < len(text) < 400) or text in seen_games:
+                continue
+            seen_games.add(text)
+            game_entry = {"raw": text}
 
-        # Fallback: chercher les sections de date + contenu adjacent
+            # Extraire les liens vers les équipes adverses dans cette carte
+            links = g.query_selector_all("a[href*='/teams/']")
+            for lnk in links:
+                href = lnk.get_attribute("href") or ""
+                lnk_text = lnk.inner_text().strip()
+                # L'adversaire = lien qui ne pointe pas vers notre propre équipe
+                if href and base_url.split("/")[-1] not in href:
+                    full = "https://page.spordle.com" + href if href.startswith("/") else href
+                    game_entry["opponent_url"] = full
+                    game_entry["opponent_name"] = lnk_text
+                    log.info(f"    Adversaire trouvé: {lnk_text} → {full}")
+
+            result["schedule"].append(game_entry)
+
+        # Fallback date headers si aucune carte trouvée
         if not result["schedule"]:
             sections = page.query_selector_all("h2, h3, h4, [class*='date'], [class*='Date']")
             for s in sections:
                 text = s.inner_text().strip()
-                if text and any(m in text.upper() for m in ["JANV", "FÉVR", "MARS", "AVRIL", "MAI", "JUIN",
-                                                              "JUIL", "AOÛT", "SEPT", "OCT", "NOV", "DÉC",
-                                                              "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-                                                              "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
-                                                              "LUNDI", "MARDI", "MERCREDI", "JEUDI", "VENDREDI",
-                                                              "SAMEDI", "DIMANCHE", "2025", "2026"]):
+                if text and any(m in text.upper() for m in ["MARS","AVRIL","MAI","JUIN","JUIL",
+                                                              "AOÛT","SEPT","OCT","NOV","DÉC",
+                                                              "SAMEDI","DIMANCHE","LUNDI","2026"]):
                     result["schedule"].append({"date_header": text})
 
         # ── Classement — intercepter les appels API réseau ──
@@ -264,6 +275,27 @@ def main():
             for team in result["teams"]:
                 if team.get("standings"):
                     result["standings"].extend(team["standings"])
+
+            # ── Scraper les équipes adverses trouvées dans les horaires ──
+            opponent_urls = {}
+            for team in result["teams"]:
+                for game in team.get("schedule", []):
+                    opp_url  = game.get("opponent_url")
+                    opp_name = game.get("opponent_name", "Inconnu")
+                    if opp_url and opp_url not in opponent_urls:
+                        opponent_urls[opp_url] = opp_name
+
+            log.info(f"\n{len(opponent_urls)} équipes adverses uniques trouvées — scraping...")
+            result["opponents"] = []
+
+            for opp_url, opp_name in list(opponent_urls.items())[:15]:  # Max 15 adversaires
+                log.info(f"  Adversaire: {opp_name}")
+                opp_team = {"name": opp_name, "url": opp_url, "category": "adversaire"}
+                detail = scrape_team_detail(page, opp_team)
+                opp_team.update(detail)
+                log.info(f"    → {len(detail['roster'])} joueurs | {len(detail['schedule'])} matchs")
+                result["opponents"].append(opp_team)
+                time.sleep(0.5)
 
         except Exception as e:
             log.error(f"Erreur: {e}")
