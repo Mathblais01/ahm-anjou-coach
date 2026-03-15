@@ -16,7 +16,7 @@ SPORDLE_ROOT = "https://page.spordle.com"
 OUTPUT_FILE  = "data/spordle_data.json"
 
 # ── Seules ces catégories seront scrappées ─────────────────────────────────
-TARGET_CATEGORIES = ["M11", "M13"]  # ← ajouter M7, M9, M15, M18 quand prêt
+TARGET_CATEGORIES = ["M13", "M15"]  # ← ajuster selon les catégories voulues
 
 NAV_WORDS = {"horaire", "classement", "joueurs", "accueil", "contact", "inscription", "équipes"}
 
