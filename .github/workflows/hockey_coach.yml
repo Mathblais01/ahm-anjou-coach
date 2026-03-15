@@ -3,8 +3,15 @@ name: Hockey Coach — Scraping & Stratégies
 on:
   workflow_dispatch:  # Lancement manuel seulement
 
+# ╔══════════════════════════════════════════════╗
+# ║             SWITCHES — ON / OFF              ║
+# ╠══════════════════════════════════════════════╣
+# ║ ENABLE_AI_STRATEGIES:  true/false            ║
+# ║ ENABLE_PUBSPORTS:      true/false            ║
+# ╚══════════════════════════════════════════════╝
 env:
-  ENABLE_AI_STRATEGIES: false   # ← changer à true quand tu as ta clé API
+  ENABLE_AI_STRATEGIES: false   # ← true quand tu as ta clé API Anthropic
+  ENABLE_PUBSPORTS:     false   # ← true si PublicationSports devient disponible
 
 jobs:
   scrape-and-generate:
@@ -30,7 +37,7 @@ jobs:
       - name: Créer le dossier data/
         run: mkdir -p data
 
-      # ── Étape 1 : Spordle (authentifié) ──────────────────────────────────
+      # ── Étape 1 : Spordle (toujours actif) ───────────────────────────────
       - name: Scraping Spordle — AHM Anjou
         env:
           SPORDLE_EMAIL:    ${{ secrets.SPORDLE_EMAIL }}
@@ -38,7 +45,7 @@ jobs:
         run: python spordle_scraper.py
         continue-on-error: true
 
-      # ── Debug : screenshot login sauvegardé comme artifact ───────────────
+      # ── Debug artifacts ───────────────────────────────────────────────────
       - name: Sauvegarder debug Spordle
         if: always()
         uses: actions/upload-artifact@v4
@@ -47,10 +54,15 @@ jobs:
           path: data/
           if-no-files-found: ignore
 
-      # ── Étape 2 : PublicationSports (public) ─────────────────────────────
+      # ── Étape 2 : PublicationSports (switch ON/OFF) ───────────────────────
       - name: Scraping PublicationSports — Stats adversaires
+        if: env.ENABLE_PUBSPORTS == 'true'
         run: python pubsports_scraper.py
         continue-on-error: true
+
+      - name: PublicationSports désactivé
+        if: env.ENABLE_PUBSPORTS == 'false'
+        run: echo "⏭️  PublicationSports désactivé — stats adversaires via Spordle uniquement"
 
       # ── Étape 3 : Stratégies IA (switch ON/OFF) ───────────────────────────
       - name: Générer les stratégies via Claude AI
@@ -59,7 +71,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python strategy_generator.py
 
-      - name: Stratégies IA désactivées — mode données seulement
+      - name: Stratégies IA désactivées
         if: env.ENABLE_AI_STRATEGIES == 'false'
         run: echo "⏭️  Stratégies IA désactivées — ajoute ta clé API et change ENABLE_AI_STRATEGIES à true"
 
