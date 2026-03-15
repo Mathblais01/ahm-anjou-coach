@@ -130,18 +130,80 @@ def scrape_team_detail(page, team: dict) -> dict:
                 result["roster"].append(text)
 
         # ── Horaire — URL directe ──
-        wait_and_load(page, f"{base_url}?tab=schedule", wait_ms=3000)
-        for g in page.query_selector_all("table tr, [class*='game'], [class*='match'], [class*='event']"):
+        wait_and_load(page, f"{base_url}?tab=schedule", wait_ms=4000)
+        # L'horaire Spordle utilise des divs, pas des tables
+        # Structure: titre de date (h2/h3) + carte de match (div)
+        # On capture tout le texte visible de la section principale
+        game_containers = page.query_selector_all(
+            "[class*='game'], [class*='match'], [class*='event'], "
+            "[class*='schedule'], [class*='card'], [class*='Game'], "
+            "[class*='Match'], [class*='Event']"
+        )
+        seen_games = set()
+        for g in game_containers:
             text = g.inner_text().strip()
-            if text and 5 < len(text) < 300:
-                result["schedule"].append(text)
+            if text and 10 < len(text) < 400 and text not in seen_games:
+                seen_games.add(text)
+                result["schedule"].append({"raw": text})
 
-        # ── Classement — URL directe ──
-        wait_and_load(page, f"{base_url}?tab=standings", wait_ms=3000)
-        for r in page.query_selector_all("table tr, [class*='standing'], [class*='rank']"):
-            text = r.inner_text().strip()
-            if text and len(text) > 2:
-                result["standings"].append(text)
+        # Fallback: chercher les sections de date + contenu adjacent
+        if not result["schedule"]:
+            sections = page.query_selector_all("h2, h3, h4, [class*='date'], [class*='Date']")
+            for s in sections:
+                text = s.inner_text().strip()
+                if text and any(m in text.upper() for m in ["JANV", "FÉVR", "MARS", "AVRIL", "MAI", "JUIN",
+                                                              "JUIL", "AOÛT", "SEPT", "OCT", "NOV", "DÉC",
+                                                              "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+                                                              "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+                                                              "LUNDI", "MARDI", "MERCREDI", "JEUDI", "VENDREDI",
+                                                              "SAMEDI", "DIMANCHE", "2025", "2026"]):
+                    result["schedule"].append({"date_header": text})
+
+        # ── Classement — sélectionner chaque option du dropdown ──
+        wait_and_load(page, f"{base_url}?tab=standings", wait_ms=4000)
+        try:
+            # Trouver le select dropdown
+            select_el = page.query_selector("select, [class*='select'], [class*='Select'], [class*='dropdown']")
+            if select_el:
+                # Récupérer toutes les options
+                options = page.query_selector_all("option, [class*='option'], [role='option']")
+                log.info(f"    Classement: {len(options)} options trouvées dans le dropdown")
+                for opt in options[:3]:  # Max 3 classements (éviter timeout)
+                    opt_text = opt.inner_text().strip()
+                    opt_val  = opt.get_attribute("value") or ""
+                    if not opt_text or len(opt_text) < 2:
+                        continue
+                    try:
+                        # Sélectionner l'option
+                        if select_el.evaluate("el => el.tagName") == "SELECT":
+                            page.select_option("select", value=opt_val) if opt_val else page.select_option("select", label=opt_text)
+                        else:
+                            opt.click()
+                        time.sleep(2)
+                        # Lire le tableau de classement
+                        rows = page.query_selector_all("table tr, [class*='standing'], [class*='rank'], [class*='Row']")
+                        standing_rows = []
+                        for r in rows:
+                            txt = r.inner_text().strip()
+                            if txt and len(txt) > 2:
+                                standing_rows.append(txt)
+                        if standing_rows:
+                            result["standings"].append({
+                                "division": opt_text,
+                                "rows": standing_rows
+                            })
+                            log.info(f"    Classement '{opt_text}': {len(standing_rows)} équipes")
+                    except Exception as e:
+                        log.debug(f"    Option '{opt_text}': {e}")
+            else:
+                # Pas de dropdown — lire directement
+                rows = page.query_selector_all("table tr, [class*='standing'], [class*='rank']")
+                for r in rows:
+                    txt = r.inner_text().strip()
+                    if txt and len(txt) > 2:
+                        result["standings"].append(txt)
+        except Exception as e:
+            log.warning(f"    Classement erreur: {e}")
 
     except Exception as e:
         log.warning(f"  Erreur {team.get('name')}: {e}")
