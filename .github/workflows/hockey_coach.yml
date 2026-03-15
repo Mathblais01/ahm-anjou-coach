@@ -1,0 +1,69 @@
+name: Hockey Coach — Scraping & Stratégies
+
+on:
+  schedule:
+    # Tous les jours à 6h00 AM heure de Montréal (11h UTC)
+    - cron: "0 11 * * *"
+  workflow_dispatch:  # Permet de lancer manuellement
+
+jobs:
+  scrape-and-generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout du repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Installer les dépendances
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: Créer le dossier data/
+        run: mkdir -p data
+
+      # ── Étape 1 : Spordle (authentifié) ──────────────────────────────────
+      - name: Scraping Spordle — AHM Anjou
+        env:
+          SPORDLE_EMAIL:    ${{ secrets.SPORDLE_EMAIL }}
+          SPORDLE_PASSWORD: ${{ secrets.SPORDLE_PASSWORD }}
+        run: python spordle_scraper.py
+        continue-on-error: true  # Ne pas bloquer si Spordle change son interface
+
+      # ── Étape 2 : PublicationSports (public) ─────────────────────────────
+      - name: Scraping PublicationSports — Stats adversaires
+        run: python pubsports_scraper.py
+        continue-on-error: true
+
+      # ── Étape 3 : Génération stratégies IA ───────────────────────────────
+      - name: Générer les stratégies via Claude AI
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python strategy_generator.py
+
+      # ── Étape 4 : Commit des données mises à jour ────────────────────────
+      - name: Commit & push les données
+        run: |
+          git config user.name  "hockey-coach-bot"
+          git config user.email "bot@ahm-anjou.hockey"
+          git add data/
+          git diff --staged --quiet || git commit -m "🏒 Mise à jour automatique — $(date +'%Y-%m-%d %H:%M') ET"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Étape 5 : Déployer le dashboard (GitHub Pages) ───────────────────
+      - name: Déployer dashboard sur GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dashboard
+          publish_branch: gh-pages
